@@ -6,6 +6,9 @@
 /*Pin mapping*/
 #define HX711DoutPin 26
 #define HX711SckPin 27
+#define vibrationSensorPin 23
+#define btnTarePin 13
+#define btnCalibratePin 14
 
 #define SamplesHX711 5
 
