@@ -9,16 +9,21 @@
 #include "driver/gpio.h"
 #include "driver/i2c.h"
 #include "sdkconfig.h"
+#include <string.h>
 
 #include "smbus.h"
 #include "i2c-lcd1602.h"
 
-/*Pin mapping*/
+/*HX711*/
 #define HX711DoutPin 26
 #define HX711SckPin 27
+
+//Interrupts
 #define vibrationSensorPin 23
 #define btnTarePin 13
 #define btnCalibratePin 14
+#define GPIO_INPUT_PIN_SEL  ((1ULL<<vibrationSensorPin) | (1ULL<<btnTarePin) | (1ULL<<btnCalibratePin))
+#define ESP_INTR_FLAG_DEFAULT 0
 
 #define SamplesHX711 5
 
@@ -36,6 +41,9 @@
 
 /*Variáveis para armazenamento do handle das tasks, queues, semaphores e timers*/
 QueueHandle_t xMessageLCD;
+QueueHandle_t xVibration;
+QueueHandle_t xTare;
+QueueHandle_t xCalibrate;
 
 static const char *TAG = "App";
 
@@ -53,6 +61,47 @@ static void i2c_master_init(void)
     i2c_driver_install(i2c_master_port, conf.mode,
                        I2C_MASTER_RX_BUF_LEN,
                        I2C_MASTER_TX_BUF_LEN, 0);
+}
+
+static void IRAM_ATTR vibration_sensor_isr_handler(void* arg)
+{
+    uint32_t gpio_num = 1;
+    xQueueSendFromISR(xVibration, &gpio_num, NULL);
+}
+
+static void IRAM_ATTR tare_isr_handler(void* arg)
+{
+    uint32_t gpio_num = 1;
+    xQueueSendFromISR(xTare, &gpio_num, NULL);
+}
+
+static void IRAM_ATTR calibrate_isr_handler(void* arg)
+{
+    uint32_t gpio_num = 1;
+    xQueueSendFromISR(xCalibrate, &gpio_num, NULL);
+}
+
+void init_interrupts(void){
+    //zero-initialize the config structure.
+    gpio_config_t io_conf = {};
+    //interrupt of rising edge
+    io_conf.intr_type = GPIO_INTR_POSEDGE;
+    //bit mask of the pins, use GPIO4/5 here
+    io_conf.pin_bit_mask = GPIO_INPUT_PIN_SEL;
+    //set as input mode
+    io_conf.mode = GPIO_MODE_INPUT;
+    //enable pull-up mode
+    io_conf.pull_up_en = 1;
+    gpio_config(&io_conf);
+
+    //install gpio isr service
+    gpio_install_isr_service(ESP_INTR_FLAG_DEFAULT);
+    //hook isr handler for specific gpio pin
+    gpio_isr_handler_add(vibrationSensorPin, vibration_sensor_isr_handler, (void*) vibrationSensorPin);
+    //hook isr handler for specific gpio pin
+    gpio_isr_handler_add(btnTarePin, tare_isr_handler, (void*) btnTarePin);
+    //hook isr handler for specific gpio pin
+    gpio_isr_handler_add(btnCalibratePin, calibrate_isr_handler, (void*) btnCalibratePin);
 }
 
 void test(void *pvParameters)
@@ -138,11 +187,10 @@ void lcd1602_task(void * pvParameter)
         xQueueReceive(xMessageLCD, &count, portMAX_DELAY);
 
         itoa(count, buffer, 10);
-        ESP_LOGI(TAG, "Count: %d", count);
-        ESP_LOGI(TAG, "Buffer: %s", buffer);
+        //ESP_LOGI(TAG, "Count: %d", count);
+        //ESP_LOGI(TAG, "Buffer: %s", buffer);
 
         // turn on backlight
-        ESP_LOGI(TAG, "backlight on");
         i2c_lcd1602_clear(lcd_info);
         i2c_lcd1602_set_backlight(lcd_info, true);
         i2c_lcd1602_move_cursor(lcd_info, 0, 0);
@@ -154,11 +202,50 @@ void lcd1602_task(void * pvParameter)
     }
 }
 
+void vibration_task(void * pvParameter)
+{
+    uint32_t io_num;
+    while(1) {
+        if(xQueueReceive(xVibration, &io_num, portMAX_DELAY)) {
+            printf("Vibration: %d\n", io_num);
+        }
+    }
+}
+
+void tare_task(void * pvParameter)
+{
+    uint32_t io_num;
+    while(1) {
+        if(xQueueReceive(xTare, &io_num, portMAX_DELAY)) {
+            printf("Tare: %d\n", io_num);
+        }
+    }
+}
+
+void calibrate_task(void * pvParameter)
+{
+    uint32_t io_num;
+    while(1) {
+        if(xQueueReceive(xCalibrate, &io_num, portMAX_DELAY)) {
+            printf("Calibrate: %d\n", io_num);
+        }
+    }
+}
+
+
 void app_main()
 {
+    init_interrupts(); 
+
     /*Criação Queues*/
     xMessageLCD = xQueueCreate(1, sizeof(int32_t));
+    xVibration = xQueueCreate(1, sizeof(uint32_t));
+    xTare = xQueueCreate(1, sizeof(uint32_t));
+    xCalibrate = xQueueCreate(1, sizeof(uint32_t));
 
     xTaskCreate(test, "test", configMINIMAL_STACK_SIZE * 5, NULL, 5, NULL);
     xTaskCreate(&lcd1602_task, "lcd1602_task", 4096, NULL, 5, NULL);
+    xTaskCreate(vibration_task, "vibration_task", 2048, NULL, 10, NULL);
+    xTaskCreate(tare_task, "tare_task", 2048, NULL, 10, NULL);
+    xTaskCreate(calibrate_task, "calibrate_task", 2048, NULL, 10, NULL);
 }
