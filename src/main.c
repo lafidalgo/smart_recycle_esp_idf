@@ -219,6 +219,8 @@ void lcd1602_task(void *pvParameter)
 
     ESP_ERROR_CHECK(i2c_lcd1602_reset(lcd_info));
 
+    i2c_lcd1602_set_backlight(lcd_info, false);
+
     LCDMessage mensagem;
     while (1)
     {
