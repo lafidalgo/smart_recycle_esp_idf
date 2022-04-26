@@ -8,11 +8,16 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <sys/unistd.h>
+#include <sys/stat.h>
+#include "esp_err.h"
+#include "esp_spiffs.h"
 #include "esp_system.h"
 #include <esp_log.h>
 #include "driver/gpio.h"
 #include "driver/i2c.h"
 #include "sdkconfig.h"
+#include "cJSON.h"
 
 #include "smbus.h"
 #include "i2c-lcd1602.h"
@@ -57,6 +62,22 @@ typedef struct
     char message[16];
 } LCDMessage;
 
+esp_vfs_spiffs_conf_t conf = {
+      .base_path = "/data",
+      .partition_label = NULL,
+      .max_files = 5,
+      .format_if_mount_failed = true
+    };
+
+#define BUF_PATH_SIZE 70
+
+typedef struct
+{
+    char filename[60];
+    char json_object[16];
+    float value;
+} SpiffsUpdate;
+
 /*Variáveis para armazenamento do handle das tasks, queues, semaphores e timers*/
 TaskHandle_t taskReadWeightHandle = NULL;
 
@@ -64,6 +85,7 @@ QueueHandle_t xMessageLCD;
 QueueHandle_t xVibration;
 QueueHandle_t xTare;
 QueueHandle_t xCalibrate;
+QueueHandle_t xSpiffsUpdate;
 
 SemaphoreHandle_t xSemaphoreTare;
 SemaphoreHandle_t xSemaphoreCalibrate;
@@ -160,6 +182,107 @@ void init_hx711(void)
     {
         ESP_LOGE(TAG, "Device not found: %d (%s)\n", r, esp_err_to_name(r));
     }
+}
+
+void init_spiffs(void){
+    //verificação do sistema de arquivos (montagem, partição existente, formatação)
+    esp_err_t ret = esp_vfs_spiffs_register(&conf);
+    if (ret != ESP_OK) {
+        if (ret == ESP_FAIL) {
+            ESP_LOGE(TAG, "Failed to mount or format filesystem");
+        } else if (ret == ESP_ERR_NOT_FOUND) {
+            ESP_LOGE(TAG, "Failed to find SPIFFS partition");
+        } else {
+            ESP_LOGE(TAG, "Failed to initialize SPIFFS (%s)", esp_err_to_name(ret));
+        }
+        while (true);
+    }
+    ESP_LOGI(TAG, "SPIFFS iniciado com sucesso");
+}
+
+float readFile(char *filename, char *json_object){
+    ESP_LOGI(TAG, "Lendo...");
+    char path[BUF_PATH_SIZE];
+    float value = 1;
+    sprintf(path, "/data/%s", filename);
+    FILE *f = fopen(path, "r");
+    if (f == NULL) {
+        ESP_LOGE(TAG, "Falha na leitura");
+        return value;
+    }
+    char line[100];
+    fread(line, sizeof(line), 1, f);
+    fclose(f);
+
+    cJSON *root = cJSON_Parse(line);
+    if (cJSON_GetObjectItem(root, json_object)) {
+		value = cJSON_GetObjectItem(root, json_object)->valuedouble;
+		ESP_LOGI(TAG, "%s: %f", json_object, value);
+	}
+    cJSON_Delete(root);
+    
+    //ESP_LOGI(TAG, "Read from file: '%s'", line);
+
+    return value;
+}
+
+void writeFile(char *filename, char *json_object, float value){
+    ESP_LOGI(TAG, "Escrevendo...");
+    char path[BUF_PATH_SIZE];
+    sprintf(path, "/data/%s", filename);
+    ESP_LOGI(TAG, "%s", path);
+    FILE* f = fopen(path, "w");
+    if (f == NULL) {
+        ESP_LOGE(TAG, "Falhou...");
+        return;
+    }
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddNumberToObject(root, json_object, value);
+    char *my_json_string = cJSON_Print(root);
+    ESP_LOGI(TAG, "%s: %f", json_object, value);
+
+    fprintf(f, my_json_string);
+    fclose(f);
+    ESP_LOGI(TAG, "Escrita feita com sucesso...");
+    cJSON_Delete(root);
+    cJSON_free(my_json_string);
+}
+
+void updateFile(char *filename, char *json_object, float value){
+    ESP_LOGI(TAG, "Atualizando...");
+    char path[BUF_PATH_SIZE];
+    sprintf(path, "/data/%s", filename);
+    FILE *f = fopen(path, "r");
+    if (f == NULL) {
+        ESP_LOGE(TAG, "Falha na leitura");
+        return;
+    }
+    char line[100];
+    fread(line, sizeof(line), 1, f);
+    fclose(f);
+
+    cJSON *root = cJSON_Parse(line);
+    if (cJSON_GetObjectItem(root, json_object)) {
+        cJSON_SetIntValue(cJSON_GetObjectItem(root, json_object), value);
+	}
+    else{
+        cJSON_AddNumberToObject(root, json_object, value);
+    }
+
+    char *my_json_string = cJSON_Print(root);
+    
+    ESP_LOGI(TAG, "%s: %f", json_object, value);
+
+    f = fopen(path, "w");
+    if (f == NULL) {
+        ESP_LOGE(TAG, "Falha na leitura");
+        return;
+    }
+    fprintf(f, my_json_string);
+    fclose(f);
+    ESP_LOGI(TAG, "Atualização feita com sucesso...");
+    cJSON_Delete(root);
+    cJSON_free(my_json_string);
 }
 
 //******************** TASKS ********************
@@ -274,6 +397,7 @@ void vibration_task(void *pvParameter)
 void tare_task(void *pvParameter)
 {
     int32_t data;
+    SpiffsUpdate update;
     while (1)
     {
         xSemaphoreTake(xSemaphoreTare, portMAX_DELAY);
@@ -292,12 +416,18 @@ void tare_task(void *pvParameter)
         tare = data;
 
         ESP_LOGI(TAG, "Tare value: %d", tare);
+
+        sprintf(update.filename, "%s", "hx711_config.txt");
+        sprintf(update.json_object, "%s", "tareValue");
+        update.value = tare;
+        xQueueSend(xSpiffsUpdate, &update, portMAX_DELAY);
     }
 }
 
 void calibrate_task(void *pvParameter)
 {
     int32_t data;
+    SpiffsUpdate update;
     while (1)
     {
         xSemaphoreTake(xSemaphoreCalibrate, portMAX_DELAY);
@@ -313,22 +443,42 @@ void calibrate_task(void *pvParameter)
             ESP_LOGE(TAG, "Could not read data: %d (%s)\n", r, esp_err_to_name(r));
         }
 
-        calibration = (data - tare) / (float)weightReference;
+        calibration = (data - tare) / (float) weightReference;
 
         ESP_LOGI(TAG, "Calibration value: %f", calibration);
+
+        sprintf(update.filename, "%s", "hx711_config.txt");
+        sprintf(update.json_object, "%s", "tareValue");
+        update.value = tare;
+        xQueueSend(xSpiffsUpdate, &update, portMAX_DELAY);
     }
+}
+
+void fileHandler_task(void *pvParameters){
+  tare = readFile("hx711_config.txt", "tareValue");
+  calibration = readFile("hx711_config.txt", "calibrationValue");
+  SpiffsUpdate update;
+  while(1){
+        xQueueReceive(xSpiffsUpdate, &update, portMAX_DELAY);
+
+        ESP_LOGI(TAG, "Update SPIFFS: %s", update.json_object);
+
+        updateFile(update.filename, update.json_object, update.value);
+  }
 }
 
 void app_main()
 {
     init_interrupts();
     init_hx711();
+    init_spiffs();
 
     /*Criação Queues*/
     xMessageLCD = xQueueCreate(10, sizeof(LCDMessage));
     xVibration = xQueueCreate(1, sizeof(uint32_t));
     xTare = xQueueCreate(1, sizeof(uint32_t));
     xCalibrate = xQueueCreate(1, sizeof(uint32_t));
+    xSpiffsUpdate = xQueueCreate(2, sizeof(SpiffsUpdate));
 
     /*Criação Semaphores*/
     xSemaphoreTare = xSemaphoreCreateBinary();
@@ -348,7 +498,8 @@ void app_main()
     /*Criação Timers*/
     xTimerReadWeightTimeout = xTimerCreate("TIMER READ WEIGHT TIMEOUT", pdMS_TO_TICKS(measureTimeout), pdTRUE, 0, callBackTimerReadWeightTimeout);
 
-    xTaskCreate(readWeight_task, "test", configMINIMAL_STACK_SIZE * 5, NULL, 5, &taskReadWeightHandle);
+    xTaskCreatePinnedToCore(fileHandler_task,"fileHandler_task",10000,NULL,1,NULL,0);
+    xTaskCreate(readWeight_task, "readWeight_task", configMINIMAL_STACK_SIZE * 5, NULL, 5, &taskReadWeightHandle);
     vTaskSuspend(taskReadWeightHandle);
     xTaskCreate(lcd1602_task, "lcd1602_task", 5120, NULL, 5, NULL);
     xTaskCreate(vibration_task, "vibration_task", 2048, NULL, 10, NULL);
