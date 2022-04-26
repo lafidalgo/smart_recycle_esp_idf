@@ -553,10 +553,16 @@ void fileHandler_task(void *pvParameters){
 
 void keypad_task(void *pvParameters){
     init_keypad();
+    char keypadChar;
+    LCDMessage mensagem;
     while(1){
         readKeypad();
         //printKeypad();
-        if(getKeypadChar()){
+        keypadChar = getKeypadChar();
+        if(keypadChar){
+            mensagem.line = 1;
+            sprintf(mensagem.message, "Tipo: %c", keypadChar);
+            xQueueSend(xMessageLCD, &mensagem, portMAX_DELAY);
             vTaskDelay(pdMS_TO_TICKS(500));
         }
         else{
