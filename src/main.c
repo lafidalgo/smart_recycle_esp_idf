@@ -78,6 +78,12 @@ typedef struct
     float value;
 } SpiffsUpdate;
 
+char rows[] = {19, 18, 5, 17};
+#define rowCount 4
+char cols[] = {16, 4, 15};
+#define colCount 3
+char keys[colCount][rowCount];
+
 /*Variáveis para armazenamento do handle das tasks, queues, semaphores e timers*/
 TaskHandle_t taskReadWeightHandle = NULL;
 
@@ -285,6 +291,71 @@ void updateFile(char *filename, char *json_object, float value){
     cJSON_free(my_json_string);
 }
 
+void init_keypad(void){
+    for(int x=0; x<rowCount; x++) {
+		//printf("%d as input, ", rows[x]);
+        gpio_set_direction(rows[x], GPIO_MODE_INPUT);
+        gpio_pullup_en(rows[x]);
+	}
+
+	for (int x=0; x<colCount; x++) {
+		//printf("%d as output, ", cols[x]);;
+        gpio_set_direction(cols[x], GPIO_MODE_OUTPUT);
+        gpio_set_level(cols[x], 1);
+	}
+    printf("\n");
+}
+
+void readKeypad(void) {
+	// iterate the columns
+	for (int colIndex=0; colIndex < colCount; colIndex++) {
+		// col: set to output to low
+		char curCol = cols[colIndex];
+        gpio_set_level(curCol, 0);
+
+		// row: interate through the rows
+		for (int rowIndex=0; rowIndex < rowCount; rowIndex++) {
+			char rowCol = rows[rowIndex];
+			keys[colIndex][rowIndex] = gpio_get_level(rowCol);
+		}
+		// disable the column
+        gpio_set_level(curCol, 1);
+	}
+}
+
+void printKeypad(void) {
+	for (int rowIndex=0; rowIndex < rowCount; rowIndex++) {
+		printf("0%d: ", rowIndex);
+
+		for (int colIndex=0; colIndex < colCount; colIndex++) {	
+			printf("%d", keys[colIndex][rowIndex]);
+			if (colIndex < colCount)
+				printf(", ");
+		}	
+		printf("\t");
+	}
+	printf(" \n");
+}
+
+char getKeypadChar(void){
+    char keymap[rowCount][colCount] = {
+        {'1', '2', '3'},
+        {'4', '5', '6'},
+        {'7', '8', '9'},
+        {'*', '0', '#'}
+        };
+
+    for (int rowIndex=0; rowIndex < rowCount; rowIndex++) {
+        for (int colIndex=0; colIndex < colCount; colIndex++) {
+            if(keys[colIndex][rowIndex] == 0){
+                printf("Botão pressionado: %c\n", keymap[rowIndex][colIndex]);
+                return (keymap[rowIndex][colIndex]);
+            }
+        }
+    }
+    return 0;
+}
+
 //******************** TASKS ********************
 
 void readWeight_task(void *pvParameters)
@@ -480,6 +551,20 @@ void fileHandler_task(void *pvParameters){
   }
 }
 
+void keypad_task(void *pvParameters){
+    init_keypad();
+    while(1){
+        readKeypad();
+        //printKeypad();
+        if(getKeypadChar()){
+            vTaskDelay(pdMS_TO_TICKS(500));
+        }
+        else{
+            vTaskDelay(pdMS_TO_TICKS(200));
+        }
+    }
+}
+
 void app_main()
 {
     init_interrupts();
@@ -518,4 +603,5 @@ void app_main()
     xTaskCreate(vibration_task, "vibration_task", 2048, NULL, 10, NULL);
     xTaskCreate(tare_task, "tare_task", 2048, NULL, 10, NULL);
     xTaskCreate(calibrate_task, "calibrate_task", 2048, NULL, 10, NULL);
+    xTaskCreate(keypad_task, "keypad_task", 2048, NULL, 10, NULL);
 }
