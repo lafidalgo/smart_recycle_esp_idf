@@ -287,7 +287,7 @@ void app_main()
     init_interrupts();
 
     /*Criação Queues*/
-    xMessageLCD = xQueueCreate(10, sizeof(char[17]));
+    xMessageLCD = xQueueCreate(10, sizeof(LCDMessage));
     xVibration = xQueueCreate(1, sizeof(uint32_t));
     xTare = xQueueCreate(1, sizeof(uint32_t));
     xCalibrate = xQueueCreate(1, sizeof(uint32_t));
