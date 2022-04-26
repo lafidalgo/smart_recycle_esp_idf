@@ -398,6 +398,7 @@ void tare_task(void *pvParameter)
 {
     int32_t data;
     SpiffsUpdate update;
+    LCDMessage mensagem;
     while (1)
     {
         xSemaphoreTake(xSemaphoreTare, portMAX_DELAY);
@@ -421,6 +422,10 @@ void tare_task(void *pvParameter)
         sprintf(update.json_object, "%s", "tareValue");
         update.value = tare;
         xQueueSend(xSpiffsUpdate, &update, portMAX_DELAY);
+
+        mensagem.line = 0;
+        sprintf(mensagem.message, "Tara concluida!");
+        xQueueSend(xMessageLCD, &mensagem, portMAX_DELAY);
     }
 }
 
@@ -428,6 +433,7 @@ void calibrate_task(void *pvParameter)
 {
     int32_t data;
     SpiffsUpdate update;
+    LCDMessage mensagem;
     while (1)
     {
         xSemaphoreTake(xSemaphoreCalibrate, portMAX_DELAY);
@@ -451,6 +457,13 @@ void calibrate_task(void *pvParameter)
         sprintf(update.json_object, "%s", "tareValue");
         update.value = tare;
         xQueueSend(xSpiffsUpdate, &update, portMAX_DELAY);
+
+        mensagem.line = 0;
+        sprintf(mensagem.message, "Calibracao");
+        xQueueSend(xMessageLCD, &mensagem, portMAX_DELAY);
+        mensagem.line = 1;
+        sprintf(mensagem.message, "concluida!");
+        xQueueSend(xMessageLCD, &mensagem, portMAX_DELAY);
     }
 }
 
