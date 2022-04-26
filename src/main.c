@@ -2,6 +2,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include "freertos/queue.h"
+#include "freertos/semphr.h"
 #include <hx711.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -17,6 +18,15 @@
 /*HX711*/
 #define HX711DoutPin 26
 #define HX711SckPin 27
+#define SamplesHX711 5
+#define weightReference 2000
+
+hx711_t dev = {
+    .dout = HX711DoutPin,
+    .pd_sck = HX711SckPin,
+    .gain = HX711_GAIN_A_64};
+int32_t tare = 0;
+float calibration = 1;
 
 // Interrupts
 #define vibrationSensorPin 23
@@ -24,8 +34,6 @@
 #define btnCalibratePin 14
 #define GPIO_INPUT_PIN_SEL ((1ULL << vibrationSensorPin) | (1ULL << btnTarePin) | (1ULL << btnCalibratePin))
 #define ESP_INTR_FLAG_DEFAULT 0
-
-#define SamplesHX711 5
 
 // LCD1602
 #define LCD_NUM_ROWS 2
@@ -51,6 +59,9 @@ QueueHandle_t xVibration;
 QueueHandle_t xTare;
 QueueHandle_t xCalibrate;
 
+SemaphoreHandle_t xSemaphoreTare;
+SemaphoreHandle_t xSemaphoreCalibrate;
+
 static const char *TAG = "App";
 
 //******************** INTERRUPTS ********************
@@ -63,14 +74,16 @@ static void IRAM_ATTR vibration_sensor_isr_handler(void *arg)
 
 static void IRAM_ATTR tare_isr_handler(void *arg)
 {
-    uint32_t gpio_num = 1;
-    xQueueSendFromISR(xTare, &gpio_num, NULL);
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+
+    xSemaphoreGiveFromISR(xSemaphoreTare, &xHigherPriorityTaskWoken);
 }
 
 static void IRAM_ATTR calibrate_isr_handler(void *arg)
 {
-    uint32_t gpio_num = 1;
-    xQueueSendFromISR(xCalibrate, &gpio_num, NULL);
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+
+    xSemaphoreGiveFromISR(xSemaphoreCalibrate, &xHigherPriorityTaskWoken);
 }
 
 //******************** FUNCTIONS ********************
@@ -115,15 +128,8 @@ void init_interrupts(void)
     gpio_isr_handler_add(btnCalibratePin, calibrate_isr_handler, (void *)btnCalibratePin);
 }
 
-//******************** TASKS ********************
-
-void test(void *pvParameters)
+void init_hx711(void)
 {
-    hx711_t dev = {
-        .dout = HX711DoutPin,
-        .pd_sck = HX711SckPin,
-        .gain = HX711_GAIN_A_64};
-
     // initialize device
     ESP_ERROR_CHECK(hx711_init(&dev));
 
@@ -132,23 +138,15 @@ void test(void *pvParameters)
     {
         ESP_LOGE(TAG, "Device not found: %d (%s)\n", r, esp_err_to_name(r));
     }
+}
 
+//******************** TASKS ********************
+
+void test(void *pvParameters)
+{
     int32_t data;
-    r = hx711_read_average(&dev, SamplesHX711, &data);
-    if (r != ESP_OK)
-    {
-        ESP_LOGE(TAG, "Could not read data: %d (%s)\n", r, esp_err_to_name(r));
-    }
-
-    int32_t tare;
-
-    tare = data;
-
-    ESP_LOGI(TAG, "Tare init: %d", tare);
-
     LCDMessage mensagem;
 
-    char weightString[16];
     // read from device
     while (1)
     {
@@ -168,16 +166,12 @@ void test(void *pvParameters)
 
         ESP_LOGI(TAG, "Raw data: %d", data);
         ESP_LOGI(TAG, "Tare data: %d", data - tare);
+        ESP_LOGI(TAG, "Calibrated data: %f", ((data - tare) / calibration) / 1000);
 
-        int32_t weight = data - tare;
+        float calibratedWeight = ((data - tare) / calibration) / 1000;
 
         mensagem.line = 0;
-        itoa(weight, weightString, 10);
-        strcpy(mensagem.message, "");
-        strcat(mensagem.message, "Peso: ");
-        strcat(mensagem.message, weightString);
-        strcat(mensagem.message, "kg");
-
+        sprintf(mensagem.message, "Peso: %0.2f kg", calibratedWeight);
         xQueueSend(xMessageLCD, &mensagem, portMAX_DELAY);
 
         vTaskDelay(pdMS_TO_TICKS(1000));
@@ -209,7 +203,7 @@ void lcd1602_task(void *pvParameter)
         xQueueReceive(xMessageLCD, &mensagem, portMAX_DELAY);
 
         ESP_LOGI(TAG, "Mensagem LCD: %s", mensagem.message);
-        // turn on backlight
+
         // i2c_lcd1602_clear(lcd_info);
         i2c_lcd1602_set_backlight(lcd_info, true);
 
@@ -255,37 +249,77 @@ void vibration_task(void *pvParameter)
 
 void tare_task(void *pvParameter)
 {
-    uint32_t io_num;
+    int32_t data;
     while (1)
     {
-        if (xQueueReceive(xTare, &io_num, portMAX_DELAY))
+        xSemaphoreTake(xSemaphoreTare, portMAX_DELAY);
+        esp_err_t r = hx711_wait(&dev, 500);
+        if (r != ESP_OK)
         {
-            printf("Tare: %d\n", io_num);
+            ESP_LOGE(TAG, "Device not found: %d (%s)\n", r, esp_err_to_name(r));
         }
+
+        r = hx711_read_average(&dev, SamplesHX711, &data);
+        if (r != ESP_OK)
+        {
+            ESP_LOGE(TAG, "Could not read data: %d (%s)\n", r, esp_err_to_name(r));
+        }
+
+        tare = data;
+
+        ESP_LOGI(TAG, "Tare value: %d", tare);
     }
 }
 
 void calibrate_task(void *pvParameter)
 {
-    uint32_t io_num;
+    int32_t data;
     while (1)
     {
-        if (xQueueReceive(xCalibrate, &io_num, portMAX_DELAY))
+        xSemaphoreTake(xSemaphoreCalibrate, portMAX_DELAY);
+        esp_err_t r = hx711_wait(&dev, 500);
+        if (r != ESP_OK)
         {
-            printf("Calibrate: %d\n", io_num);
+            ESP_LOGE(TAG, "Device not found: %d (%s)\n", r, esp_err_to_name(r));
         }
+
+        r = hx711_read_average(&dev, SamplesHX711, &data);
+        if (r != ESP_OK)
+        {
+            ESP_LOGE(TAG, "Could not read data: %d (%s)\n", r, esp_err_to_name(r));
+        }
+
+        calibration = (data - tare) / weightReference;
+
+        ESP_LOGI(TAG, "Calibration value: %f", calibration);
     }
 }
 
 void app_main()
 {
     init_interrupts();
+    init_hx711();
 
     /*Criação Queues*/
     xMessageLCD = xQueueCreate(10, sizeof(LCDMessage));
     xVibration = xQueueCreate(1, sizeof(uint32_t));
     xTare = xQueueCreate(1, sizeof(uint32_t));
     xCalibrate = xQueueCreate(1, sizeof(uint32_t));
+
+    /*Criação Semaphores*/
+    xSemaphoreTare = xSemaphoreCreateBinary();
+    if (xSemaphoreTare == NULL)
+    {
+        ESP_LOGW(TAG, "Não foi possível criar o semáforo");
+        esp_restart();
+    }
+
+    xSemaphoreCalibrate = xSemaphoreCreateBinary();
+    if (xSemaphoreCalibrate == NULL)
+    {
+        ESP_LOGW(TAG, "Não foi possível criar o semáforo");
+        esp_restart();
+    }
 
     xTaskCreate(test, "test", configMINIMAL_STACK_SIZE * 5, NULL, 5, NULL);
     xTaskCreate(lcd1602_task, "lcd1602_task", 5120, NULL, 5, NULL);
