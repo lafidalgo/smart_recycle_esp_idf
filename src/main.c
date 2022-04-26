@@ -148,7 +148,6 @@ void test(void *pvParameters)
 
     LCDMessage mensagem;
 
-    char buffer[16];
     char weightString[16];
     // read from device
     while (1)
@@ -172,13 +171,12 @@ void test(void *pvParameters)
 
         int32_t weight = data - tare;
 
-        itoa(weight, weightString, 10);
-        strcpy(buffer, "");
-        strcat(buffer, "Peso: ");
-        strcat(buffer, weightString);
-        strcat(buffer, "kg");
         mensagem.line = 0;
-        strcpy(mensagem.message, buffer);
+        itoa(weight, weightString, 10);
+        strcpy(mensagem.message, "");
+        strcat(mensagem.message, "Peso: ");
+        strcat(mensagem.message, weightString);
+        strcat(mensagem.message, "kg");
 
         xQueueSend(xMessageLCD, &mensagem, portMAX_DELAY);
 
@@ -210,8 +208,7 @@ void lcd1602_task(void *pvParameter)
     {
         xQueueReceive(xMessageLCD, &mensagem, portMAX_DELAY);
 
-        ESP_LOGI(TAG, "Mensagem LCD: %s; Linha: ", mensagem.message);
-
+        ESP_LOGI(TAG, "Mensagem LCD: %s", mensagem.message);
         // turn on backlight
         // i2c_lcd1602_clear(lcd_info);
         i2c_lcd1602_set_backlight(lcd_info, true);
@@ -240,8 +237,6 @@ void lcd1602_task(void *pvParameter)
 
         i2c_lcd1602_write_string(lcd_info, mensagem.message);
 
-        // vTaskDelay(pdMS_TO_TICKS(1000));
-        //  turn off backlight
         // i2c_lcd1602_set_backlight(lcd_info, false);
     }
 }
