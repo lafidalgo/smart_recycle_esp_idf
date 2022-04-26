@@ -39,6 +39,11 @@
 #define I2C_MASTER_SDA_IO        21
 #define I2C_MASTER_SCL_IO        22
 
+typedef struct{
+    char line;
+    char message[16];
+}LCDMessage;
+
 /*Variáveis para armazenamento do handle das tasks, queues, semaphores e timers*/
 QueueHandle_t xMessageLCD;
 QueueHandle_t xVibration;
@@ -133,6 +138,10 @@ void test(void *pvParameters)
 
     ESP_LOGI(TAG, "Tare init: %d", tare);
 
+    LCDMessage mensagem;
+
+    char buffer[16];
+    char weightString[16];
     // read from device
     while (1)
     {
@@ -155,9 +164,17 @@ void test(void *pvParameters)
 
         int32_t weight = data - tare;
 
-        xQueueOverwrite(xMessageLCD, &weight);
+        itoa(weight, weightString, 10);
+        strcpy(buffer, "");
+        strcat(buffer, "Peso: ");
+        strcat(buffer, weightString);
+        strcat(buffer, "kg");
+        mensagem.line = 0;
+        strcpy(mensagem.message, buffer);
 
-        vTaskDelay(pdMS_TO_TICKS(500));
+        xQueueSend(xMessageLCD, &mensagem, portMAX_DELAY);        
+
+        vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }
 
@@ -180,24 +197,42 @@ void lcd1602_task(void * pvParameter)
 
     ESP_ERROR_CHECK(i2c_lcd1602_reset(lcd_info));
 
-    int32_t count = 0;
-    char buffer[15];
+    LCDMessage mensagem;
+
     while(1){
+        xQueueReceive(xMessageLCD, &mensagem, portMAX_DELAY);
 
-        xQueueReceive(xMessageLCD, &count, portMAX_DELAY);
-
-        itoa(count, buffer, 10);
-        //ESP_LOGI(TAG, "Count: %d", count);
-        //ESP_LOGI(TAG, "Buffer: %s", buffer);
+        ESP_LOGI(TAG, "Mensagem LCD: %s; Linha: ", mensagem.message);
 
         // turn on backlight
-        i2c_lcd1602_clear(lcd_info);
+        //i2c_lcd1602_clear(lcd_info);
         i2c_lcd1602_set_backlight(lcd_info, true);
-        i2c_lcd1602_move_cursor(lcd_info, 0, 0);
-        i2c_lcd1602_write_string(lcd_info, buffer);
+        
+        switch(mensagem.line){
+            case 0:
+                i2c_lcd1602_move_cursor(lcd_info, 0, 0);
+                for(int n = 0; n < LCD_NUM_VISIBLE_COLUMNS; n++) // 20 indicates symbols in line. For 2x16 LCD write - 16
+                {
+                    i2c_lcd1602_write_char(lcd_info, 0x20);
+                }
+                i2c_lcd1602_move_cursor(lcd_info, 0, 0);
+                break;
+            case 1:
+                i2c_lcd1602_move_cursor(lcd_info, 0, 1);
+                for(int n = 0; n < LCD_NUM_VISIBLE_COLUMNS; n++) // 20 indicates symbols in line. For 2x16 LCD write - 16
+                {
+                    i2c_lcd1602_write_char(lcd_info, 0x20);
+                }
+                i2c_lcd1602_move_cursor(lcd_info, 0, 1);
+                break;
+            default:
+                ESP_LOGW(TAG, "Linha LCD fora do limite");
+        }
+            
+        i2c_lcd1602_write_string(lcd_info, mensagem.message);
 
+        //vTaskDelay(pdMS_TO_TICKS(1000));
         // turn off backlight
-        //ESP_LOGI(TAG, "backlight off");
         //i2c_lcd1602_set_backlight(lcd_info, false);
     }
 }
@@ -238,13 +273,13 @@ void app_main()
     init_interrupts(); 
 
     /*Criação Queues*/
-    xMessageLCD = xQueueCreate(1, sizeof(int32_t));
+    xMessageLCD = xQueueCreate(10, sizeof( struct LCDMessage * ));
     xVibration = xQueueCreate(1, sizeof(uint32_t));
     xTare = xQueueCreate(1, sizeof(uint32_t));
     xCalibrate = xQueueCreate(1, sizeof(uint32_t));
 
     xTaskCreate(test, "test", configMINIMAL_STACK_SIZE * 5, NULL, 5, NULL);
-    xTaskCreate(&lcd1602_task, "lcd1602_task", 4096, NULL, 5, NULL);
+    xTaskCreate(lcd1602_task, "lcd1602_task", 5120, NULL, 5, NULL);
     xTaskCreate(vibration_task, "vibration_task", 2048, NULL, 10, NULL);
     xTaskCreate(tare_task, "tare_task", 2048, NULL, 10, NULL);
     xTaskCreate(calibrate_task, "calibrate_task", 2048, NULL, 10, NULL);
