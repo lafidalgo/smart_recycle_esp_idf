@@ -1,25 +1,29 @@
-#include <esp_log.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
-#include <hx711.h>
+#include "freertos/timers.h"
+
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+
 #include "esp_system.h"
+#include <esp_log.h>
 #include "driver/gpio.h"
 #include "driver/i2c.h"
 #include "sdkconfig.h"
-#include <string.h>
 
 #include "smbus.h"
 #include "i2c-lcd1602.h"
+#include <hx711.h>
 
 /*HX711*/
 #define HX711DoutPin 26
 #define HX711SckPin 27
 #define SamplesHX711 5
 #define weightReference 2000
+#define measureTimeout 30000          // Timeout in ms to measure weight
 
 hx711_t dev = {
     .dout = HX711DoutPin,
@@ -54,6 +58,8 @@ typedef struct
 } LCDMessage;
 
 /*Variáveis para armazenamento do handle das tasks, queues, semaphores e timers*/
+TaskHandle_t taskReadWeightHandle = NULL;
+
 QueueHandle_t xMessageLCD;
 QueueHandle_t xVibration;
 QueueHandle_t xTare;
@@ -62,14 +68,18 @@ QueueHandle_t xCalibrate;
 SemaphoreHandle_t xSemaphoreTare;
 SemaphoreHandle_t xSemaphoreCalibrate;
 
+TimerHandle_t xTimerReadWeightTimeout;
+
 static const char *TAG = "App";
 
 //******************** INTERRUPTS ********************
 
 static void IRAM_ATTR vibration_sensor_isr_handler(void *arg)
 {
-    uint32_t gpio_num = 1;
-    xQueueSendFromISR(xVibration, &gpio_num, NULL);
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+
+    xTaskResumeFromISR(taskReadWeightHandle);
+    xTimerStartFromISR(xTimerReadWeightTimeout, &xHigherPriorityTaskWoken);
 }
 
 static void IRAM_ATTR tare_isr_handler(void *arg)
@@ -84,6 +94,18 @@ static void IRAM_ATTR calibrate_isr_handler(void *arg)
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
 
     xSemaphoreGiveFromISR(xSemaphoreCalibrate, &xHigherPriorityTaskWoken);
+}
+
+//******************** TIMERS ********************
+void callBackTimerReadWeightTimeout(TimerHandle_t xTimer)
+{
+  LCDMessage mensagem;
+
+  vTaskSuspend(taskReadWeightHandle);
+  xTimerStop(xTimerReadWeightTimeout, 0);
+  mensagem.line = 0;
+  sprintf(mensagem.message, "Tempo esgotado");
+  xQueueSend(xMessageLCD, &mensagem, portMAX_DELAY);
 }
 
 //******************** FUNCTIONS ********************
@@ -142,7 +164,7 @@ void init_hx711(void)
 
 //******************** TASKS ********************
 
-void test(void *pvParameters)
+void readWeight_task(void *pvParameters)
 {
     int32_t data;
     LCDMessage mensagem;
@@ -289,7 +311,7 @@ void calibrate_task(void *pvParameter)
             ESP_LOGE(TAG, "Could not read data: %d (%s)\n", r, esp_err_to_name(r));
         }
 
-        calibration = (data - tare) / weightReference;
+        calibration = (data - tare) / (float)weightReference;
 
         ESP_LOGI(TAG, "Calibration value: %f", calibration);
     }
@@ -321,7 +343,11 @@ void app_main()
         esp_restart();
     }
 
-    xTaskCreate(test, "test", configMINIMAL_STACK_SIZE * 5, NULL, 5, NULL);
+    /*Criação Timers*/
+    xTimerReadWeightTimeout = xTimerCreate("TIMER READ WEIGHT TIMEOUT", pdMS_TO_TICKS(measureTimeout), pdTRUE, 0, callBackTimerReadWeightTimeout);
+
+    xTaskCreate(readWeight_task, "test", configMINIMAL_STACK_SIZE * 5, NULL, 5, &taskReadWeightHandle);
+    vTaskSuspend(taskReadWeightHandle);
     xTaskCreate(lcd1602_task, "lcd1602_task", 5120, NULL, 5, NULL);
     xTaskCreate(vibration_task, "vibration_task", 2048, NULL, 10, NULL);
     xTaskCreate(tare_task, "tare_task", 2048, NULL, 10, NULL);

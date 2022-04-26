@@ -2,6 +2,10 @@
     "files.associations": {
         "freertos.h": "c",
         "task.h": "c",
-        "*.ipp": "c"
+        "*.ipp": "c",
+        "hx711.h": "c",
+        "timers.h": "c",
+        "semphr.h": "c",
+        "i2c.h": "c"
     }
 }
