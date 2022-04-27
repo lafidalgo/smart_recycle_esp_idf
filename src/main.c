@@ -56,12 +56,18 @@ float calibration = 1;
 #define I2C_MASTER_SDA_IO 21
 #define I2C_MASTER_SCL_IO 22
 
+#define LCDOffTimeout 2000
+
 typedef struct
 {
+    bool lcdOff;
+    bool lcdEnTimeoutOff; 
+    bool clear;
     char line;
     char message[16];
 } LCDMessage;
 
+// SPIFFS
 esp_vfs_spiffs_conf_t conf = {
       .base_path = "/data",
       .partition_label = NULL,
@@ -97,6 +103,7 @@ SemaphoreHandle_t xSemaphoreTare;
 SemaphoreHandle_t xSemaphoreCalibrate;
 
 TimerHandle_t xTimerReadWeightTimeout;
+TimerHandle_t xTimerLCDOff;
 
 static const char *TAG = "App";
 
@@ -131,9 +138,25 @@ void callBackTimerReadWeightTimeout(TimerHandle_t xTimer)
 
   vTaskSuspend(taskReadWeightHandle);
   xTimerStop(xTimerReadWeightTimeout, 0);
+  mensagem.lcdEnTimeoutOff = 1;
+  mensagem.lcdOff = 0;
+  mensagem.clear = 1;
   mensagem.line = 0;
   sprintf(mensagem.message, "Tempo esgotado");
   xQueueSend(xMessageLCD, &mensagem, portMAX_DELAY);
+}
+
+void callBackTimerLCDOff(TimerHandle_t xTimer)
+{
+    LCDMessage mensagem;
+
+    xTimerStop(xTimerLCDOff, 0);
+    mensagem.lcdEnTimeoutOff = 0;
+    mensagem.lcdOff = 1;
+    mensagem.clear = 1;
+    mensagem.line = 0;
+    sprintf(mensagem.message, "LCD OFF");
+    xQueueSend(xMessageLCD, &mensagem, portMAX_DELAY);
 }
 
 //******************** FUNCTIONS ********************
@@ -386,6 +409,9 @@ void readWeight_task(void *pvParameters)
 
         float calibratedWeight = ((data - tare) / calibration) / 1000;
 
+        mensagem.lcdEnTimeoutOff = 0;
+        mensagem.lcdOff = 0;
+        mensagem.clear = 0;
         mensagem.line = 0;
         sprintf(mensagem.message, "Peso: %0.2f kg", calibratedWeight);
         xQueueSend(xMessageLCD, &mensagem, portMAX_DELAY);
@@ -422,34 +448,45 @@ void lcd1602_task(void *pvParameter)
 
         ESP_LOGI(TAG, "Mensagem LCD: %s", mensagem.message);
 
-        // i2c_lcd1602_clear(lcd_info);
-        i2c_lcd1602_set_backlight(lcd_info, true);
-
-        switch (mensagem.line)
-        {
-        case 0:
-            i2c_lcd1602_move_cursor(lcd_info, 0, 0);
-            for (int n = 0; n < LCD_NUM_VISIBLE_COLUMNS; n++) // 20 indicates symbols in line. For 2x16 LCD write - 16
-            {
-                i2c_lcd1602_write_char(lcd_info, 0x20);
-            }
-            i2c_lcd1602_move_cursor(lcd_info, 0, 0);
-            break;
-        case 1:
-            i2c_lcd1602_move_cursor(lcd_info, 0, 1);
-            for (int n = 0; n < LCD_NUM_VISIBLE_COLUMNS; n++) // 20 indicates symbols in line. For 2x16 LCD write - 16
-            {
-                i2c_lcd1602_write_char(lcd_info, 0x20);
-            }
-            i2c_lcd1602_move_cursor(lcd_info, 0, 1);
-            break;
-        default:
-            ESP_LOGW(TAG, "Linha LCD fora do limite");
+        if(mensagem.lcdOff){
+            i2c_lcd1602_clear(lcd_info);
+            i2c_lcd1602_set_backlight(lcd_info, false);
         }
+        else{
+            i2c_lcd1602_set_backlight(lcd_info, true);
 
-        i2c_lcd1602_write_string(lcd_info, mensagem.message);
+            if(mensagem.clear){
+                i2c_lcd1602_clear(lcd_info);    
+            }
 
-        // i2c_lcd1602_set_backlight(lcd_info, false);
+            switch (mensagem.line)
+            {
+            case 0:
+                i2c_lcd1602_move_cursor(lcd_info, 0, 0);
+                for (int n = 0; n < LCD_NUM_VISIBLE_COLUMNS; n++) // 20 indicates symbols in line. For 2x16 LCD write - 16
+                {
+                    i2c_lcd1602_write_char(lcd_info, 0x20);
+                }
+                i2c_lcd1602_move_cursor(lcd_info, 0, 0);
+                break;
+            case 1:
+                i2c_lcd1602_move_cursor(lcd_info, 0, 1);
+                for (int n = 0; n < LCD_NUM_VISIBLE_COLUMNS; n++) // 20 indicates symbols in line. For 2x16 LCD write - 16
+                {
+                    i2c_lcd1602_write_char(lcd_info, 0x20);
+                }
+                i2c_lcd1602_move_cursor(lcd_info, 0, 1);
+                break;
+            default:
+                ESP_LOGW(TAG, "Linha LCD fora do limite");
+            }
+            
+            if(mensagem.lcdEnTimeoutOff){
+                xTimerReset(xTimerLCDOff, 0);
+            }
+
+            i2c_lcd1602_write_string(lcd_info, mensagem.message);
+        }
     }
 }
 
@@ -494,6 +531,9 @@ void tare_task(void *pvParameter)
         update.value = tare;
         xQueueSend(xSpiffsUpdate, &update, portMAX_DELAY);
 
+        mensagem.lcdEnTimeoutOff = 1;
+        mensagem.lcdOff = 0;
+        mensagem.clear = 1;
         mensagem.line = 0;
         sprintf(mensagem.message, "Tara concluida!");
         xQueueSend(xMessageLCD, &mensagem, portMAX_DELAY);
@@ -529,9 +569,14 @@ void calibrate_task(void *pvParameter)
         update.value = tare;
         xQueueSend(xSpiffsUpdate, &update, portMAX_DELAY);
 
+        mensagem.lcdEnTimeoutOff = 1;
+        mensagem.lcdOff = 0;
+        mensagem.clear = 1;
         mensagem.line = 0;
         sprintf(mensagem.message, "Calibracao");
         xQueueSend(xMessageLCD, &mensagem, portMAX_DELAY);
+
+        mensagem.clear = 0;
         mensagem.line = 1;
         sprintf(mensagem.message, "concluida!");
         xQueueSend(xMessageLCD, &mensagem, portMAX_DELAY);
@@ -560,6 +605,9 @@ void keypad_task(void *pvParameters){
         //printKeypad();
         keypadChar = getKeypadChar();
         if(keypadChar){
+            mensagem.lcdEnTimeoutOff = 0;
+            mensagem.lcdOff = 0;
+            mensagem.clear = 0;
             mensagem.line = 1;
             sprintf(mensagem.message, "Tipo: %c", keypadChar);
             xQueueSend(xMessageLCD, &mensagem, portMAX_DELAY);
@@ -601,7 +649,9 @@ void app_main()
 
     /*Criação Timers*/
     xTimerReadWeightTimeout = xTimerCreate("TIMER READ WEIGHT TIMEOUT", pdMS_TO_TICKS(measureTimeout), pdTRUE, 0, callBackTimerReadWeightTimeout);
+    xTimerLCDOff = xTimerCreate("TIMER LCD OFF", pdMS_TO_TICKS(LCDOffTimeout), pdTRUE, 0, callBackTimerLCDOff);
 
+    /*Criação Tasks*/
     xTaskCreatePinnedToCore(fileHandler_task,"fileHandler_task",10000,NULL,1,NULL,0);
     xTaskCreate(readWeight_task, "readWeight_task", configMINIMAL_STACK_SIZE * 5, NULL, 5, &taskReadWeightHandle);
     vTaskSuspend(taskReadWeightHandle);
