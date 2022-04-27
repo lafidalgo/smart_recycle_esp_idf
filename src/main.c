@@ -60,8 +60,7 @@ float calibration = 1;
 
 typedef struct
 {
-    bool lcdOff;
-    bool lcdEnTimeoutOff; 
+    char lcdEnTimeoutOff; 
     bool clear;
     char line;
     char message[16];
@@ -139,7 +138,6 @@ void callBackTimerReadWeightTimeout(TimerHandle_t xTimer)
   vTaskSuspend(taskReadWeightHandle);
   xTimerStop(xTimerReadWeightTimeout, 0);
   mensagem.lcdEnTimeoutOff = 1;
-  mensagem.lcdOff = 0;
   mensagem.clear = 1;
   mensagem.line = 0;
   sprintf(mensagem.message, "Tempo esgotado");
@@ -151,8 +149,7 @@ void callBackTimerLCDOff(TimerHandle_t xTimer)
     LCDMessage mensagem;
 
     xTimerStop(xTimerLCDOff, 0);
-    mensagem.lcdEnTimeoutOff = 0;
-    mensagem.lcdOff = 1;
+    mensagem.lcdEnTimeoutOff = 2;
     mensagem.clear = 1;
     mensagem.line = 0;
     sprintf(mensagem.message, "LCD OFF");
@@ -410,7 +407,6 @@ void readWeight_task(void *pvParameters)
         float calibratedWeight = ((data - tare) / calibration) / 1000;
 
         mensagem.lcdEnTimeoutOff = 0;
-        mensagem.lcdOff = 0;
         mensagem.clear = 0;
         mensagem.line = 0;
         sprintf(mensagem.message, "Peso: %0.2f kg", calibratedWeight);
@@ -448,7 +444,7 @@ void lcd1602_task(void *pvParameter)
 
         ESP_LOGI(TAG, "Mensagem LCD: %s", mensagem.message);
 
-        if(mensagem.lcdOff){
+        if(mensagem.lcdEnTimeoutOff == 2){
             i2c_lcd1602_clear(lcd_info);
             i2c_lcd1602_set_backlight(lcd_info, false);
         }
@@ -481,7 +477,7 @@ void lcd1602_task(void *pvParameter)
                 ESP_LOGW(TAG, "Linha LCD fora do limite");
             }
             
-            if(mensagem.lcdEnTimeoutOff){
+            if(mensagem.lcdEnTimeoutOff == 1){
                 xTimerReset(xTimerLCDOff, 0);
             }
 
@@ -532,7 +528,6 @@ void tare_task(void *pvParameter)
         xQueueSend(xSpiffsUpdate, &update, portMAX_DELAY);
 
         mensagem.lcdEnTimeoutOff = 1;
-        mensagem.lcdOff = 0;
         mensagem.clear = 1;
         mensagem.line = 0;
         sprintf(mensagem.message, "Tara concluida!");
@@ -570,7 +565,6 @@ void calibrate_task(void *pvParameter)
         xQueueSend(xSpiffsUpdate, &update, portMAX_DELAY);
 
         mensagem.lcdEnTimeoutOff = 1;
-        mensagem.lcdOff = 0;
         mensagem.clear = 1;
         mensagem.line = 0;
         sprintf(mensagem.message, "Calibracao");
@@ -606,7 +600,6 @@ void keypad_task(void *pvParameters){
         keypadChar = getKeypadChar();
         if(keypadChar){
             mensagem.lcdEnTimeoutOff = 0;
-            mensagem.lcdOff = 0;
             mensagem.clear = 0;
             mensagem.line = 1;
             sprintf(mensagem.message, "Tipo: %c", keypadChar);
