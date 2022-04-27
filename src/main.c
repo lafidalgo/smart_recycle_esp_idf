@@ -594,15 +594,29 @@ void keypad_task(void *pvParameters){
     init_keypad();
     char keypadChar;
     LCDMessage mensagem;
+    int trashTypeKeypad = 0;
+
     while(1){
         readKeypad();
         //printKeypad();
         keypadChar = getKeypadChar();
         if(keypadChar){
+            ESP_LOGI(TAG, "Botão pressionado: %c", keypadChar);
+            switch (keypadChar){
+                case '*':
+                    trashTypeKeypad = trashTypeKeypad / 10;
+                    break;
+                case '#':
+                    ESP_LOGI(TAG, "Tipo selecionado: %c", trashTypeKeypad);
+                    break;
+                default:
+                    keypadChar -= 48;
+                    trashTypeKeypad = trashTypeKeypad * 10 + keypadChar;
+            }
             mensagem.lcdEnTimeoutOff = 0;
             mensagem.clear = 0;
             mensagem.line = 1;
-            sprintf(mensagem.message, "Tipo: %c", keypadChar);
+            sprintf(mensagem.message, "Tipo: %d", trashTypeKeypad);
             xQueueSend(xMessageLCD, &mensagem, portMAX_DELAY);
             vTaskDelay(pdMS_TO_TICKS(500));
         }
