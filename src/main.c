@@ -91,6 +91,7 @@ char keys[colCount][rowCount];
 
 /*Variáveis para armazenamento do handle das tasks, queues, semaphores e timers*/
 TaskHandle_t taskReadWeightHandle = NULL;
+TaskHandle_t taskKeypadHandle = NULL;
 
 QueueHandle_t xMessageLCD;
 QueueHandle_t xVibration;
@@ -100,6 +101,7 @@ QueueHandle_t xSpiffsUpdate;
 
 SemaphoreHandle_t xSemaphoreTare;
 SemaphoreHandle_t xSemaphoreCalibrate;
+SemaphoreHandle_t xSemaphoreStopKeypad;
 
 TimerHandle_t xTimerReadWeightTimeout;
 TimerHandle_t xTimerLCDOff;
@@ -113,6 +115,7 @@ static void IRAM_ATTR vibration_sensor_isr_handler(void *arg)
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
 
     xTaskResumeFromISR(taskReadWeightHandle);
+    xTaskResumeFromISR(taskKeypadHandle);
     xTimerStartFromISR(xTimerReadWeightTimeout, &xHigherPriorityTaskWoken);
 }
 
@@ -136,6 +139,7 @@ void callBackTimerReadWeightTimeout(TimerHandle_t xTimer)
   LCDMessage mensagem;
 
   vTaskSuspend(taskReadWeightHandle);
+  xSemaphoreGive(xSemaphoreStopKeypad);
   xTimerStop(xTimerReadWeightTimeout, 0);
   mensagem.lcdEnTimeoutOff = 1;
   mensagem.clear = 1;
@@ -608,6 +612,7 @@ void keypad_task(void *pvParameters){
                     break;
                 case '#':
                     ESP_LOGI(TAG, "Tipo selecionado: %c", trashTypeKeypad);
+                    trashTypeKeypad = 0;
                     break;
                 default:
                     keypadChar -= 48;
@@ -622,6 +627,11 @@ void keypad_task(void *pvParameters){
         }
         else{
             vTaskDelay(pdMS_TO_TICKS(200));
+        }
+
+        if(xSemaphoreTake(xSemaphoreStopKeypad, pdMS_TO_TICKS(10)) == pdPASS){
+            trashTypeKeypad = 0;
+            vTaskSuspend(taskKeypadHandle);
         }
     }
 }
@@ -654,6 +664,13 @@ void app_main()
         esp_restart();
     }
 
+    xSemaphoreStopKeypad = xSemaphoreCreateBinary();
+    if (xSemaphoreStopKeypad == NULL)
+    {
+        ESP_LOGW(TAG, "Não foi possível criar o semáforo");
+        esp_restart();
+    }
+
     /*Criação Timers*/
     xTimerReadWeightTimeout = xTimerCreate("TIMER READ WEIGHT TIMEOUT", pdMS_TO_TICKS(measureTimeout), pdTRUE, 0, callBackTimerReadWeightTimeout);
     xTimerLCDOff = xTimerCreate("TIMER LCD OFF", pdMS_TO_TICKS(LCDOffTimeout), pdTRUE, 0, callBackTimerLCDOff);
@@ -666,5 +683,6 @@ void app_main()
     xTaskCreate(vibration_task, "vibration_task", 2048, NULL, 10, NULL);
     xTaskCreate(tare_task, "tare_task", 2048, NULL, 10, NULL);
     xTaskCreate(calibrate_task, "calibrate_task", 2048, NULL, 10, NULL);
-    xTaskCreate(keypad_task, "keypad_task", 2048, NULL, 10, NULL);
+    xTaskCreate(keypad_task, "keypad_task", 2048, NULL, 10, &taskKeypadHandle);
+    vTaskSuspend(taskKeypadHandle);
 }
