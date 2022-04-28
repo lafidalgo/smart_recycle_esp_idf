@@ -83,9 +83,18 @@ typedef struct
     float value;
 } SpiffsUpdate;
 
-char rows[] = {19, 18, 5, 17};
+#define row1 19
+#define row2 18
+#define row3 5
+#define row4 17
+#define GPIO_INPUT_PIN_SEL_KEYPAD ((1ULL << row1) | (1ULL << row2) | (1ULL << row3) | (1ULL << row4))
+#define column1 16
+#define column2 4
+#define column3 15
+#define GPIO_OUTPUT_PIN_SEL_KEYPAD ((1ULL << column1) | (1ULL << column2) | (1ULL << column3))
+char rows[] = {row1, row2, row3, row4};
 #define rowCount 4
-char cols[] = {16, 4, 15};
+char cols[] = {column1, column2, column3};
 #define colCount 3
 char keys[colCount][rowCount];
 
@@ -336,20 +345,16 @@ void updateFile(char *filename, char *json_object, float value)
 
 void init_keypad(void)
 {
-    for (int x = 0; x < rowCount; x++)
-    {
-        // printf("%d as input, ", rows[x]);
-        gpio_set_direction(rows[x], GPIO_MODE_INPUT);
-        gpio_pullup_en(rows[x]);
-    }
+    gpio_config_t io_conf = {};
+    io_conf.pin_bit_mask = GPIO_INPUT_PIN_SEL_KEYPAD;
+    io_conf.mode = GPIO_MODE_INPUT;
+    io_conf.pull_up_en = 1;
+    gpio_config(&io_conf);
 
-    for (int x = 0; x < colCount; x++)
-    {
-        // printf("%d as output, ", cols[x]);;
-        gpio_set_direction(cols[x], GPIO_MODE_OUTPUT);
-        gpio_set_level(cols[x], 1);
-    }
-    printf("\n");
+    io_conf.pin_bit_mask = GPIO_OUTPUT_PIN_SEL_KEYPAD;
+    io_conf.mode = GPIO_MODE_OUTPUT;
+    io_conf.pull_up_en = 0;
+    gpio_config(&io_conf);
 }
 
 void readKeypad(void)
@@ -403,7 +408,7 @@ char getKeypadChar(void)
         {
             if (keys[colIndex][rowIndex] == 0)
             {
-                printf("Botão pressionado: %c\n", keymap[rowIndex][colIndex]);
+                //printf("Botão pressionado: %c\n", keymap[rowIndex][colIndex]);
                 return (keymap[rowIndex][colIndex]);
             }
         }
@@ -646,6 +651,7 @@ void keypad_task(void *pvParameters)
     char keypadChar;
     LCDMessage mensagem;
     int trashTypeKeypad = 0;
+    bool messageSent = 0;
 
     while (1)
     {
@@ -661,19 +667,32 @@ void keypad_task(void *pvParameters)
                 trashTypeKeypad = trashTypeKeypad / 10;
                 break;
             case '#':
-                ESP_LOGI(TAG, "Tipo selecionado: %c", trashTypeKeypad);
+                ESP_LOGI(TAG, "Tipo selecionado: %d", trashTypeKeypad);
+                messageSent = 1;
                 trashTypeKeypad = 0;
+                xSemaphoreGive(xSemaphoreStopReadWeight);
+                xSemaphoreGive(xSemaphoreStopKeypad);
+                xTimerStop(xTimerReadWeightTimeout, 0);
+                mensagem.lcdEnTimeoutOff = 1;
+                mensagem.clear = 1;
+                mensagem.line = 0;
+                sprintf(mensagem.message, "Peso enviado!");
+                xQueueSend(xMessageLCD, &mensagem, portMAX_DELAY);
                 break;
             default:
                 keypadChar -= 48;
                 trashTypeKeypad = trashTypeKeypad * 10 + keypadChar;
             }
-            mensagem.lcdEnTimeoutOff = 0;
-            mensagem.clear = 0;
-            mensagem.line = 1;
-            sprintf(mensagem.message, "Tipo: %d", trashTypeKeypad);
-            xQueueSend(xMessageLCD, &mensagem, portMAX_DELAY);
-            vTaskDelay(pdMS_TO_TICKS(500));
+
+            if(!messageSent){
+                mensagem.lcdEnTimeoutOff = 0;
+                mensagem.clear = 0;
+                mensagem.line = 1;
+                sprintf(mensagem.message, "Tipo: %d", trashTypeKeypad);
+                xQueueSend(xMessageLCD, &mensagem, portMAX_DELAY);
+                vTaskDelay(pdMS_TO_TICKS(500));
+            }
+            else{messageSent = 0;}
         }
         else
         {
