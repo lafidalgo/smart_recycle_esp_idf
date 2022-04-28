@@ -102,6 +102,7 @@ QueueHandle_t xSpiffsUpdate;
 SemaphoreHandle_t xSemaphoreTare;
 SemaphoreHandle_t xSemaphoreCalibrate;
 SemaphoreHandle_t xSemaphoreStopKeypad;
+SemaphoreHandle_t xSemaphoreStopReadWeight;
 
 TimerHandle_t xTimerReadWeightTimeout;
 TimerHandle_t xTimerLCDOff;
@@ -138,7 +139,7 @@ void callBackTimerReadWeightTimeout(TimerHandle_t xTimer)
 {
   LCDMessage mensagem;
 
-  vTaskSuspend(taskReadWeightHandle);
+  xSemaphoreGive(xSemaphoreStopReadWeight);
   xSemaphoreGive(xSemaphoreStopKeypad);
   xTimerStop(xTimerReadWeightTimeout, 0);
   mensagem.lcdEnTimeoutOff = 1;
@@ -404,8 +405,8 @@ void readWeight_task(void *pvParameters)
             continue;
         }
 
-        ESP_LOGI(TAG, "Raw data: %d", data);
-        ESP_LOGI(TAG, "Tare data: %d", data - tare);
+        //ESP_LOGI(TAG, "Raw data: %d", data);
+        //ESP_LOGI(TAG, "Tare data: %d", data - tare);
         ESP_LOGI(TAG, "Calibrated data: %f", ((data - tare) / calibration) / 1000);
 
         float calibratedWeight = ((data - tare) / calibration) / 1000;
@@ -417,6 +418,12 @@ void readWeight_task(void *pvParameters)
         xQueueSend(xMessageLCD, &mensagem, portMAX_DELAY);
 
         vTaskDelay(pdMS_TO_TICKS(1000));
+
+        if(xSemaphoreTake(xSemaphoreStopReadWeight, pdMS_TO_TICKS(10)) == pdPASS){
+            data = 0;
+            ESP_LOGI(TAG, "Read Weight Task suspended");
+            vTaskSuspend(taskReadWeightHandle);
+        }
     }
 }
 
@@ -490,18 +497,6 @@ void lcd1602_task(void *pvParameter)
     }
 }
 
-void vibration_task(void *pvParameter)
-{
-    uint32_t io_num;
-    while (1)
-    {
-        if (xQueueReceive(xVibration, &io_num, portMAX_DELAY))
-        {
-            printf("Vibration: %d\n", io_num);
-        }
-    }
-}
-
 void tare_task(void *pvParameter)
 {
     int32_t data;
@@ -510,6 +505,9 @@ void tare_task(void *pvParameter)
     while (1)
     {
         xSemaphoreTake(xSemaphoreTare, portMAX_DELAY);
+        xSemaphoreGive(xSemaphoreStopReadWeight);
+        xSemaphoreGive(xSemaphoreStopKeypad);
+
         esp_err_t r = hx711_wait(&dev, 500);
         if (r != ESP_OK)
         {
@@ -547,6 +545,9 @@ void calibrate_task(void *pvParameter)
     while (1)
     {
         xSemaphoreTake(xSemaphoreCalibrate, portMAX_DELAY);
+        xSemaphoreGive(xSemaphoreStopReadWeight);
+        xSemaphoreGive(xSemaphoreStopKeypad);
+
         esp_err_t r = hx711_wait(&dev, 500);
         if (r != ESP_OK)
         {
@@ -631,6 +632,7 @@ void keypad_task(void *pvParameters){
 
         if(xSemaphoreTake(xSemaphoreStopKeypad, pdMS_TO_TICKS(10)) == pdPASS){
             trashTypeKeypad = 0;
+            ESP_LOGI(TAG, "Keypad Task suspended");
             vTaskSuspend(taskKeypadHandle);
         }
     }
@@ -671,6 +673,13 @@ void app_main()
         esp_restart();
     }
 
+    xSemaphoreStopReadWeight = xSemaphoreCreateBinary();
+    if (xSemaphoreStopReadWeight == NULL)
+    {
+        ESP_LOGW(TAG, "Não foi possível criar o semáforo");
+        esp_restart();
+    }
+
     /*Criação Timers*/
     xTimerReadWeightTimeout = xTimerCreate("TIMER READ WEIGHT TIMEOUT", pdMS_TO_TICKS(measureTimeout), pdTRUE, 0, callBackTimerReadWeightTimeout);
     xTimerLCDOff = xTimerCreate("TIMER LCD OFF", pdMS_TO_TICKS(LCDOffTimeout), pdTRUE, 0, callBackTimerLCDOff);
@@ -680,9 +689,8 @@ void app_main()
     xTaskCreate(readWeight_task, "readWeight_task", configMINIMAL_STACK_SIZE * 5, NULL, 5, &taskReadWeightHandle);
     vTaskSuspend(taskReadWeightHandle);
     xTaskCreate(lcd1602_task, "lcd1602_task", 5120, NULL, 5, NULL);
-    xTaskCreate(vibration_task, "vibration_task", 2048, NULL, 10, NULL);
     xTaskCreate(tare_task, "tare_task", 2048, NULL, 10, NULL);
     xTaskCreate(calibrate_task, "calibrate_task", 2048, NULL, 10, NULL);
     xTaskCreate(keypad_task, "keypad_task", 2048, NULL, 10, &taskKeypadHandle);
-    vTaskSuspend(taskKeypadHandle);
+    xSemaphoreGive(xSemaphoreStopKeypad);
 }
