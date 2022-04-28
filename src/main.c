@@ -425,7 +425,14 @@ void readWeight_task(void *pvParameters)
     // read from device
     while (1)
     {
-        esp_err_t r = hx711_wait(&dev, 500);
+        esp_err_t r = hx711_power_down(&dev, false);
+        if (r != ESP_OK)
+        {
+            ESP_LOGE(TAG, "Could not power up: %d (%s)\n", r, esp_err_to_name(r));
+            continue;
+        }
+        
+        r = hx711_wait(&dev, 500);
         if (r != ESP_OK)
         {
             ESP_LOGE(TAG, "Device not found: %d (%s)\n", r, esp_err_to_name(r));
@@ -458,6 +465,13 @@ void readWeight_task(void *pvParameters)
         mensagem.line = 1;
         sprintf(mensagem.message, "Qntd: %0.0f", quantityUnits);
         xQueueSend(xMessageLCD, &mensagem, portMAX_DELAY);*/
+
+        r = hx711_power_down(&dev, true);
+        if (r != ESP_OK)
+        {
+            ESP_LOGE(TAG, "Could not power down: %d (%s)\n", r, esp_err_to_name(r));
+            continue;
+        }
 
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
