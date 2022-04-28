@@ -28,7 +28,8 @@
 #define HX711SckPin 27
 #define SamplesHX711 5
 #define weightReference 2000
-#define measureTimeout 30000          // Timeout in ms to measure weight
+#define measureTimeout 30000      // Timeout in ms to measure weight
+#define weightUnitReference 0.768 // Em kg
 
 hx711_t dev = {
     .dout = HX711DoutPin,
@@ -60,7 +61,7 @@ float calibration = 1;
 
 typedef struct
 {
-    char lcdEnTimeoutOff; 
+    char lcdEnTimeoutOff;
     bool clear;
     char line;
     char message[16];
@@ -68,11 +69,10 @@ typedef struct
 
 // SPIFFS
 esp_vfs_spiffs_conf_t conf = {
-      .base_path = "/data",
-      .partition_label = NULL,
-      .max_files = 5,
-      .format_if_mount_failed = true
-    };
+    .base_path = "/data",
+    .partition_label = NULL,
+    .max_files = 5,
+    .format_if_mount_failed = true};
 
 #define BUF_PATH_SIZE 70
 
@@ -137,16 +137,16 @@ static void IRAM_ATTR calibrate_isr_handler(void *arg)
 //******************** TIMERS ********************
 void callBackTimerReadWeightTimeout(TimerHandle_t xTimer)
 {
-  LCDMessage mensagem;
+    LCDMessage mensagem;
 
-  xSemaphoreGive(xSemaphoreStopReadWeight);
-  xSemaphoreGive(xSemaphoreStopKeypad);
-  xTimerStop(xTimerReadWeightTimeout, 0);
-  mensagem.lcdEnTimeoutOff = 1;
-  mensagem.clear = 1;
-  mensagem.line = 0;
-  sprintf(mensagem.message, "Tempo esgotado");
-  xQueueSend(xMessageLCD, &mensagem, portMAX_DELAY);
+    xSemaphoreGive(xSemaphoreStopReadWeight);
+    xSemaphoreGive(xSemaphoreStopKeypad);
+    xTimerStop(xTimerReadWeightTimeout, 0);
+    mensagem.lcdEnTimeoutOff = 1;
+    mensagem.clear = 1;
+    mensagem.line = 0;
+    sprintf(mensagem.message, "Tempo esgotado");
+    xQueueSend(xMessageLCD, &mensagem, portMAX_DELAY);
 }
 
 void callBackTimerLCDOff(TimerHandle_t xTimer)
@@ -215,29 +215,39 @@ void init_hx711(void)
     }
 }
 
-void init_spiffs(void){
-    //verificação do sistema de arquivos (montagem, partição existente, formatação)
+void init_spiffs(void)
+{
+    // verificação do sistema de arquivos (montagem, partição existente, formatação)
     esp_err_t ret = esp_vfs_spiffs_register(&conf);
-    if (ret != ESP_OK) {
-        if (ret == ESP_FAIL) {
+    if (ret != ESP_OK)
+    {
+        if (ret == ESP_FAIL)
+        {
             ESP_LOGE(TAG, "Failed to mount or format filesystem");
-        } else if (ret == ESP_ERR_NOT_FOUND) {
+        }
+        else if (ret == ESP_ERR_NOT_FOUND)
+        {
             ESP_LOGE(TAG, "Failed to find SPIFFS partition");
-        } else {
+        }
+        else
+        {
             ESP_LOGE(TAG, "Failed to initialize SPIFFS (%s)", esp_err_to_name(ret));
         }
-        while (true);
+        while (true)
+            ;
     }
     ESP_LOGI(TAG, "SPIFFS iniciado com sucesso");
 }
 
-float readFile(char *filename, char *json_object){
+float readFile(char *filename, char *json_object)
+{
     ESP_LOGI(TAG, "Lendo...");
     char path[BUF_PATH_SIZE];
     float value = 1;
     sprintf(path, "/data/%s", filename);
     FILE *f = fopen(path, "r");
-    if (f == NULL) {
+    if (f == NULL)
+    {
         ESP_LOGE(TAG, "Falha na leitura");
         return value;
     }
@@ -246,24 +256,27 @@ float readFile(char *filename, char *json_object){
     fclose(f);
 
     cJSON *root = cJSON_Parse(line);
-    if (cJSON_GetObjectItem(root, json_object)) {
-		value = cJSON_GetObjectItem(root, json_object)->valuedouble;
-		ESP_LOGI(TAG, "%s: %f", json_object, value);
-	}
+    if (cJSON_GetObjectItem(root, json_object))
+    {
+        value = cJSON_GetObjectItem(root, json_object)->valuedouble;
+        ESP_LOGI(TAG, "%s: %f", json_object, value);
+    }
     cJSON_Delete(root);
-    
-    //ESP_LOGI(TAG, "Read from file: '%s'", line);
+
+    // ESP_LOGI(TAG, "Read from file: '%s'", line);
 
     return value;
 }
 
-void writeFile(char *filename, char *json_object, float value){
+void writeFile(char *filename, char *json_object, float value)
+{
     ESP_LOGI(TAG, "Escrevendo...");
     char path[BUF_PATH_SIZE];
     sprintf(path, "/data/%s", filename);
     ESP_LOGI(TAG, "%s", path);
-    FILE* f = fopen(path, "w");
-    if (f == NULL) {
+    FILE *f = fopen(path, "w");
+    if (f == NULL)
+    {
         ESP_LOGE(TAG, "Falhou...");
         return;
     }
@@ -279,12 +292,14 @@ void writeFile(char *filename, char *json_object, float value){
     cJSON_free(my_json_string);
 }
 
-void updateFile(char *filename, char *json_object, float value){
+void updateFile(char *filename, char *json_object, float value)
+{
     ESP_LOGI(TAG, "Atualizando...");
     char path[BUF_PATH_SIZE];
     sprintf(path, "/data/%s", filename);
     FILE *f = fopen(path, "r");
-    if (f == NULL) {
+    if (f == NULL)
+    {
         ESP_LOGE(TAG, "Falha na leitura");
         return;
     }
@@ -293,19 +308,22 @@ void updateFile(char *filename, char *json_object, float value){
     fclose(f);
 
     cJSON *root = cJSON_Parse(line);
-    if (cJSON_GetObjectItem(root, json_object)) {
+    if (cJSON_GetObjectItem(root, json_object))
+    {
         cJSON_SetIntValue(cJSON_GetObjectItem(root, json_object), value);
-	}
-    else{
+    }
+    else
+    {
         cJSON_AddNumberToObject(root, json_object, value);
     }
 
     char *my_json_string = cJSON_Print(root);
-    
+
     ESP_LOGI(TAG, "%s: %f", json_object, value);
 
     f = fopen(path, "w");
-    if (f == NULL) {
+    if (f == NULL)
+    {
         ESP_LOGE(TAG, "Falha na leitura");
         return;
     }
@@ -316,63 +334,75 @@ void updateFile(char *filename, char *json_object, float value){
     cJSON_free(my_json_string);
 }
 
-void init_keypad(void){
-    for(int x=0; x<rowCount; x++) {
-		//printf("%d as input, ", rows[x]);
+void init_keypad(void)
+{
+    for (int x = 0; x < rowCount; x++)
+    {
+        // printf("%d as input, ", rows[x]);
         gpio_set_direction(rows[x], GPIO_MODE_INPUT);
         gpio_pullup_en(rows[x]);
-	}
+    }
 
-	for (int x=0; x<colCount; x++) {
-		//printf("%d as output, ", cols[x]);;
+    for (int x = 0; x < colCount; x++)
+    {
+        // printf("%d as output, ", cols[x]);;
         gpio_set_direction(cols[x], GPIO_MODE_OUTPUT);
         gpio_set_level(cols[x], 1);
-	}
+    }
     printf("\n");
 }
 
-void readKeypad(void) {
-	// iterate the columns
-	for (int colIndex=0; colIndex < colCount; colIndex++) {
-		// col: set to output to low
-		char curCol = cols[colIndex];
+void readKeypad(void)
+{
+    // iterate the columns
+    for (int colIndex = 0; colIndex < colCount; colIndex++)
+    {
+        // col: set to output to low
+        char curCol = cols[colIndex];
         gpio_set_level(curCol, 0);
 
-		// row: interate through the rows
-		for (int rowIndex=0; rowIndex < rowCount; rowIndex++) {
-			char rowCol = rows[rowIndex];
-			keys[colIndex][rowIndex] = gpio_get_level(rowCol);
-		}
-		// disable the column
+        // row: interate through the rows
+        for (int rowIndex = 0; rowIndex < rowCount; rowIndex++)
+        {
+            char rowCol = rows[rowIndex];
+            keys[colIndex][rowIndex] = gpio_get_level(rowCol);
+        }
+        // disable the column
         gpio_set_level(curCol, 1);
-	}
+    }
 }
 
-void printKeypad(void) {
-	for (int rowIndex=0; rowIndex < rowCount; rowIndex++) {
-		printf("0%d: ", rowIndex);
+void printKeypad(void)
+{
+    for (int rowIndex = 0; rowIndex < rowCount; rowIndex++)
+    {
+        printf("0%d: ", rowIndex);
 
-		for (int colIndex=0; colIndex < colCount; colIndex++) {	
-			printf("%d", keys[colIndex][rowIndex]);
-			if (colIndex < colCount)
-				printf(", ");
-		}	
-		printf("\t");
-	}
-	printf(" \n");
+        for (int colIndex = 0; colIndex < colCount; colIndex++)
+        {
+            printf("%d", keys[colIndex][rowIndex]);
+            if (colIndex < colCount)
+                printf(", ");
+        }
+        printf("\t");
+    }
+    printf(" \n");
 }
 
-char getKeypadChar(void){
+char getKeypadChar(void)
+{
     char keymap[rowCount][colCount] = {
         {'1', '2', '3'},
         {'4', '5', '6'},
         {'7', '8', '9'},
-        {'*', '0', '#'}
-        };
+        {'*', '0', '#'}};
 
-    for (int rowIndex=0; rowIndex < rowCount; rowIndex++) {
-        for (int colIndex=0; colIndex < colCount; colIndex++) {
-            if(keys[colIndex][rowIndex] == 0){
+    for (int rowIndex = 0; rowIndex < rowCount; rowIndex++)
+    {
+        for (int colIndex = 0; colIndex < colCount; colIndex++)
+        {
+            if (keys[colIndex][rowIndex] == 0)
+            {
                 printf("Botão pressionado: %c\n", keymap[rowIndex][colIndex]);
                 return (keymap[rowIndex][colIndex]);
             }
@@ -405,11 +435,13 @@ void readWeight_task(void *pvParameters)
             continue;
         }
 
-        //ESP_LOGI(TAG, "Raw data: %d", data);
-        //ESP_LOGI(TAG, "Tare data: %d", data - tare);
-        ESP_LOGI(TAG, "Calibrated data: %f", ((data - tare) / calibration) / 1000);
-
         float calibratedWeight = ((data - tare) / calibration) / 1000;
+        // float quantityUnits = calibratedWeight / weightUnitReference;
+
+        // ESP_LOGI(TAG, "Raw data: %d", data);
+        // ESP_LOGI(TAG, "Tare data: %d", data - tare);
+        ESP_LOGI(TAG, "Calibrated data: %f", calibratedWeight);
+        // ESP_LOGI(TAG, "Quantity units: %f", quantityUnits);
 
         mensagem.lcdEnTimeoutOff = 0;
         mensagem.clear = 0;
@@ -417,9 +449,16 @@ void readWeight_task(void *pvParameters)
         sprintf(mensagem.message, "Peso: %0.2f kg", calibratedWeight);
         xQueueSend(xMessageLCD, &mensagem, portMAX_DELAY);
 
+        /*mensagem.lcdEnTimeoutOff = 0;
+        mensagem.clear = 0;
+        mensagem.line = 1;
+        sprintf(mensagem.message, "Qntd: %0.0f", quantityUnits);
+        xQueueSend(xMessageLCD, &mensagem, portMAX_DELAY);*/
+
         vTaskDelay(pdMS_TO_TICKS(1000));
 
-        if(xSemaphoreTake(xSemaphoreStopReadWeight, pdMS_TO_TICKS(10)) == pdPASS){
+        if (xSemaphoreTake(xSemaphoreStopReadWeight, pdMS_TO_TICKS(10)) == pdPASS)
+        {
             data = 0;
             ESP_LOGI(TAG, "Read Weight Task suspended");
             vTaskSuspend(taskReadWeightHandle);
@@ -455,15 +494,18 @@ void lcd1602_task(void *pvParameter)
 
         ESP_LOGI(TAG, "Mensagem LCD: %s", mensagem.message);
 
-        if(mensagem.lcdEnTimeoutOff == 2){
+        if (mensagem.lcdEnTimeoutOff == 2)
+        {
             i2c_lcd1602_clear(lcd_info);
             i2c_lcd1602_set_backlight(lcd_info, false);
         }
-        else{
+        else
+        {
             i2c_lcd1602_set_backlight(lcd_info, true);
 
-            if(mensagem.clear){
-                i2c_lcd1602_clear(lcd_info);    
+            if (mensagem.clear)
+            {
+                i2c_lcd1602_clear(lcd_info);
             }
 
             switch (mensagem.line)
@@ -487,8 +529,9 @@ void lcd1602_task(void *pvParameter)
             default:
                 ESP_LOGW(TAG, "Linha LCD fora do limite");
             }
-            
-            if(mensagem.lcdEnTimeoutOff == 1){
+
+            if (mensagem.lcdEnTimeoutOff == 1)
+            {
                 xTimerReset(xTimerLCDOff, 0);
             }
 
@@ -560,7 +603,7 @@ void calibrate_task(void *pvParameter)
             ESP_LOGE(TAG, "Could not read data: %d (%s)\n", r, esp_err_to_name(r));
         }
 
-        calibration = (data - tare) / (float) weightReference;
+        calibration = (data - tare) / (float)weightReference;
 
         ESP_LOGI(TAG, "Calibration value: %f", calibration);
 
@@ -582,42 +625,48 @@ void calibrate_task(void *pvParameter)
     }
 }
 
-void fileHandler_task(void *pvParameters){
-  tare = readFile("hx711_config.txt", "tareValue");
-  calibration = readFile("hx711_config.txt", "calibrationValue");
-  SpiffsUpdate update;
-  while(1){
+void fileHandler_task(void *pvParameters)
+{
+    tare = readFile("hx711_config.txt", "tareValue");
+    calibration = readFile("hx711_config.txt", "calibrationValue");
+    SpiffsUpdate update;
+    while (1)
+    {
         xQueueReceive(xSpiffsUpdate, &update, portMAX_DELAY);
 
         ESP_LOGI(TAG, "Update SPIFFS: %s", update.json_object);
 
         updateFile(update.filename, update.json_object, update.value);
-  }
+    }
 }
 
-void keypad_task(void *pvParameters){
+void keypad_task(void *pvParameters)
+{
     init_keypad();
     char keypadChar;
     LCDMessage mensagem;
     int trashTypeKeypad = 0;
 
-    while(1){
+    while (1)
+    {
         readKeypad();
-        //printKeypad();
+        // printKeypad();
         keypadChar = getKeypadChar();
-        if(keypadChar){
+        if (keypadChar)
+        {
             ESP_LOGI(TAG, "Botão pressionado: %c", keypadChar);
-            switch (keypadChar){
-                case '*':
-                    trashTypeKeypad = trashTypeKeypad / 10;
-                    break;
-                case '#':
-                    ESP_LOGI(TAG, "Tipo selecionado: %c", trashTypeKeypad);
-                    trashTypeKeypad = 0;
-                    break;
-                default:
-                    keypadChar -= 48;
-                    trashTypeKeypad = trashTypeKeypad * 10 + keypadChar;
+            switch (keypadChar)
+            {
+            case '*':
+                trashTypeKeypad = trashTypeKeypad / 10;
+                break;
+            case '#':
+                ESP_LOGI(TAG, "Tipo selecionado: %c", trashTypeKeypad);
+                trashTypeKeypad = 0;
+                break;
+            default:
+                keypadChar -= 48;
+                trashTypeKeypad = trashTypeKeypad * 10 + keypadChar;
             }
             mensagem.lcdEnTimeoutOff = 0;
             mensagem.clear = 0;
@@ -626,11 +675,13 @@ void keypad_task(void *pvParameters){
             xQueueSend(xMessageLCD, &mensagem, portMAX_DELAY);
             vTaskDelay(pdMS_TO_TICKS(500));
         }
-        else{
+        else
+        {
             vTaskDelay(pdMS_TO_TICKS(200));
         }
 
-        if(xSemaphoreTake(xSemaphoreStopKeypad, pdMS_TO_TICKS(10)) == pdPASS){
+        if (xSemaphoreTake(xSemaphoreStopKeypad, pdMS_TO_TICKS(10)) == pdPASS)
+        {
             trashTypeKeypad = 0;
             ESP_LOGI(TAG, "Keypad Task suspended");
             vTaskSuspend(taskKeypadHandle);
@@ -685,7 +736,7 @@ void app_main()
     xTimerLCDOff = xTimerCreate("TIMER LCD OFF", pdMS_TO_TICKS(LCDOffTimeout), pdTRUE, 0, callBackTimerLCDOff);
 
     /*Criação Tasks*/
-    xTaskCreatePinnedToCore(fileHandler_task,"fileHandler_task",10000,NULL,1,NULL,0);
+    xTaskCreatePinnedToCore(fileHandler_task, "fileHandler_task", 10000, NULL, 1, NULL, 0);
     xTaskCreate(readWeight_task, "readWeight_task", configMINIMAL_STACK_SIZE * 5, NULL, 5, &taskReadWeightHandle);
     vTaskSuspend(taskReadWeightHandle);
     xTaskCreate(lcd1602_task, "lcd1602_task", 5120, NULL, 5, NULL);
