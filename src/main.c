@@ -485,6 +485,12 @@ void lcd1602_task(void *pvParameter)
     i2c_lcd1602_set_backlight(lcd_info, false);
 
     LCDMessage mensagem;
+
+    mensagem.lcdEnTimeoutOff = 1;
+    mensagem.clear = 1;
+    mensagem.line = 0;
+    sprintf(mensagem.message, "Balanca ligada!");
+    xQueueSend(xMessageLCD, &mensagem, portMAX_DELAY);
     while (1)
     {
         xQueueReceive(xMessageLCD, &mensagem, portMAX_DELAY);
