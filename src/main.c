@@ -14,6 +14,7 @@
 #include "esp_spiffs.h"
 #include "esp_system.h"
 #include <esp_log.h>
+#include <esp_sleep.h>
 #include "driver/gpio.h"
 #include "driver/i2c.h"
 #include "sdkconfig.h"
@@ -101,6 +102,11 @@ char keys[colCount][rowCount];
 /*Variáveis para armazenamento do handle das tasks, queues, semaphores e timers*/
 TaskHandle_t taskReadWeightHandle = NULL;
 TaskHandle_t taskKeypadHandle = NULL;
+TaskHandle_t taskLCDHandle = NULL;
+TaskHandle_t taskTareHandle = NULL;
+TaskHandle_t taskCalibrateHandle = NULL;
+TaskHandle_t taskSleepHandle = NULL;
+TaskHandle_t taskFileHandlerHandle = NULL;
 
 QueueHandle_t xMessageLCD;
 QueueHandle_t xVibration;
@@ -111,6 +117,8 @@ QueueHandle_t xSpiffsUpdate;
 SemaphoreHandle_t xSemaphoreTare;
 SemaphoreHandle_t xSemaphoreCalibrate;
 SemaphoreHandle_t xSemaphoreStopKeypad;
+SemaphoreHandle_t xSemaphoreStopReadWeight;
+SemaphoreHandle_t xSemaphoreSleep;
 
 TimerHandle_t xTimerReadWeightTimeout;
 TimerHandle_t xTimerLCDOff;
@@ -147,7 +155,7 @@ void callBackTimerReadWeightTimeout(TimerHandle_t xTimer)
 {
     LCDMessage mensagem;
 
-    vTaskSuspend(taskReadWeightHandle);
+    xSemaphoreGive(xSemaphoreStopReadWeight);
     xSemaphoreGive(xSemaphoreStopKeypad);
     xTimerStop(xTimerReadWeightTimeout, 0);
     mensagem.lcdEnTimeoutOff = 1;
@@ -466,11 +474,17 @@ void readWeight_task(void *pvParameters)
         sprintf(mensagem.message, "Qntd: %0.0f", quantityUnits);
         xQueueSend(xMessageLCD, &mensagem, portMAX_DELAY);*/
 
-        r = hx711_power_down(&dev, true);
-        if (r != ESP_OK)
+        if (xSemaphoreTake(xSemaphoreStopReadWeight, pdMS_TO_TICKS(10)) == pdPASS)
         {
-            ESP_LOGE(TAG, "Could not power down: %d (%s)\n", r, esp_err_to_name(r));
-            continue;
+            r = hx711_power_down(&dev, true);
+            if (r != ESP_OK)
+            {
+                ESP_LOGE(TAG, "Could not power down: %d (%s)\n", r, esp_err_to_name(r));
+                continue;
+            }
+            ESP_LOGI(TAG, "Read Weight Task suspended");
+            xSemaphoreGive(xSemaphoreSleep);
+            vTaskSuspend(taskReadWeightHandle);
         }
 
         vTaskDelay(pdMS_TO_TICKS(1000));
@@ -565,7 +579,7 @@ void tare_task(void *pvParameter)
     while (1)
     {
         xSemaphoreTake(xSemaphoreTare, portMAX_DELAY);
-        vTaskSuspend(taskReadWeightHandle);
+        //xSemaphoreGive(xSemaphoreStopReadWeight);
         xSemaphoreGive(xSemaphoreStopKeypad);
 
         esp_err_t r = hx711_wait(&dev, 500);
@@ -594,6 +608,8 @@ void tare_task(void *pvParameter)
         mensagem.line = 0;
         sprintf(mensagem.message, "Tara concluida!");
         xQueueSend(xMessageLCD, &mensagem, portMAX_DELAY);
+
+        xSemaphoreGive(xSemaphoreSleep);
     }
 }
 
@@ -605,7 +621,7 @@ void calibrate_task(void *pvParameter)
     while (1)
     {
         xSemaphoreTake(xSemaphoreCalibrate, portMAX_DELAY);
-        vTaskSuspend(taskReadWeightHandle);
+        //xSemaphoreGive(xSemaphoreStopReadWeight);
         xSemaphoreGive(xSemaphoreStopKeypad);
 
         esp_err_t r = hx711_wait(&dev, 500);
@@ -639,6 +655,8 @@ void calibrate_task(void *pvParameter)
         mensagem.line = 1;
         sprintf(mensagem.message, "concluida!");
         xQueueSend(xMessageLCD, &mensagem, portMAX_DELAY);
+
+        xSemaphoreGive(xSemaphoreSleep);
     }
 }
 
@@ -682,7 +700,7 @@ void keypad_task(void *pvParameters)
                 ESP_LOGI(TAG, "Tipo selecionado: %d", trashTypeKeypad);
                 messageSent = 1;
                 trashTypeKeypad = 0;
-                vTaskSuspend(taskReadWeightHandle);
+                xSemaphoreGive(xSemaphoreStopReadWeight);
                 xSemaphoreGive(xSemaphoreStopKeypad);
                 xTimerStop(xTimerReadWeightTimeout, 0);
                 mensagem.lcdEnTimeoutOff = 1;
@@ -720,6 +738,37 @@ void keypad_task(void *pvParameters)
     }
 }
 
+void sleep_task(void *pvParameters)
+{
+    esp_sleep_pd_config(ESP_PD_DOMAIN_VDDSDIO, ESP_PD_OPTION_ON);
+    gpio_wakeup_enable(vibrationSensorPin, GPIO_INTR_LOW_LEVEL);
+    gpio_wakeup_enable(btnTarePin, GPIO_INTR_LOW_LEVEL);
+    gpio_wakeup_enable(btnCalibratePin, GPIO_INTR_LOW_LEVEL);
+
+    esp_err_t r = esp_sleep_enable_gpio_wakeup();
+    if (r != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Couldn't config gpio wakeup mode: %d (%s)\n", r, esp_err_to_name(r));
+    }
+
+    while(1){
+        xSemaphoreTake(xSemaphoreSleep, portMAX_DELAY);
+
+        vTaskDelay(pdMS_TO_TICKS(3000));
+
+        ESP_LOGI(TAG, "Entering sleep mode");
+
+        vTaskDelay(pdMS_TO_TICKS(3000));
+
+        esp_err_t r = esp_light_sleep_start();
+        if (r != ESP_OK)
+        {
+            ESP_LOGE(TAG, "Couldn't enter sleep mode: %d (%s)\n", r, esp_err_to_name(r));
+        }
+    }
+
+}
+
 void app_main()
 {
     init_interrupts();
@@ -755,17 +804,32 @@ void app_main()
         esp_restart();
     }
 
+    xSemaphoreStopReadWeight = xSemaphoreCreateBinary();
+    if (xSemaphoreStopReadWeight == NULL)
+    {
+        ESP_LOGW(TAG, "Não foi possível criar o semáforo");
+        esp_restart();
+    }
+
+    xSemaphoreSleep = xSemaphoreCreateBinary();
+    if (xSemaphoreSleep == NULL)
+    {
+        ESP_LOGW(TAG, "Não foi possível criar o semáforo");
+        esp_restart();
+    }
+
     /*Criação Timers*/
     xTimerReadWeightTimeout = xTimerCreate("TIMER READ WEIGHT TIMEOUT", pdMS_TO_TICKS(measureTimeout), pdTRUE, 0, callBackTimerReadWeightTimeout);
     xTimerLCDOff = xTimerCreate("TIMER LCD OFF", pdMS_TO_TICKS(LCDOffTimeout), pdTRUE, 0, callBackTimerLCDOff);
 
     /*Criação Tasks*/
-    xTaskCreatePinnedToCore(fileHandler_task, "fileHandler_task", 10000, NULL, 1, NULL, 0);
+    xTaskCreatePinnedToCore(fileHandler_task, "fileHandler_task", 10000, NULL, 1, &taskFileHandlerHandle, 0);
     xTaskCreate(readWeight_task, "readWeight_task", configMINIMAL_STACK_SIZE * 5, NULL, 5, &taskReadWeightHandle);
     vTaskSuspend(taskReadWeightHandle);
-    xTaskCreate(lcd1602_task, "lcd1602_task", 5120, NULL, 5, NULL);
-    xTaskCreate(tare_task, "tare_task", 2048, NULL, 10, NULL);
-    xTaskCreate(calibrate_task, "calibrate_task", 2048, NULL, 10, NULL);
+    xTaskCreate(lcd1602_task, "lcd1602_task", 5120, NULL, 5, &taskLCDHandle);
+    xTaskCreate(tare_task, "tare_task", 2048, NULL, 10, &taskTareHandle);
+    xTaskCreate(calibrate_task, "calibrate_task", 2048, NULL, 10, &taskCalibrateHandle);
     xTaskCreate(keypad_task, "keypad_task", 2048, NULL, 10, &taskKeypadHandle);
     xSemaphoreGive(xSemaphoreStopKeypad);
+    xTaskCreate(sleep_task, "sleep_task", 2048, NULL, 2, &taskSleepHandle);
 }
