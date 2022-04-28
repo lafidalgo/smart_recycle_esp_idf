@@ -111,7 +111,6 @@ QueueHandle_t xSpiffsUpdate;
 SemaphoreHandle_t xSemaphoreTare;
 SemaphoreHandle_t xSemaphoreCalibrate;
 SemaphoreHandle_t xSemaphoreStopKeypad;
-SemaphoreHandle_t xSemaphoreStopReadWeight;
 
 TimerHandle_t xTimerReadWeightTimeout;
 TimerHandle_t xTimerLCDOff;
@@ -148,7 +147,7 @@ void callBackTimerReadWeightTimeout(TimerHandle_t xTimer)
 {
     LCDMessage mensagem;
 
-    xSemaphoreGive(xSemaphoreStopReadWeight);
+    vTaskSuspend(taskReadWeightHandle);
     xSemaphoreGive(xSemaphoreStopKeypad);
     xTimerStop(xTimerReadWeightTimeout, 0);
     mensagem.lcdEnTimeoutOff = 1;
@@ -461,13 +460,6 @@ void readWeight_task(void *pvParameters)
         xQueueSend(xMessageLCD, &mensagem, portMAX_DELAY);*/
 
         vTaskDelay(pdMS_TO_TICKS(1000));
-
-        if (xSemaphoreTake(xSemaphoreStopReadWeight, pdMS_TO_TICKS(10)) == pdPASS)
-        {
-            data = 0;
-            ESP_LOGI(TAG, "Read Weight Task suspended");
-            vTaskSuspend(taskReadWeightHandle);
-        }
     }
 }
 
@@ -553,7 +545,7 @@ void tare_task(void *pvParameter)
     while (1)
     {
         xSemaphoreTake(xSemaphoreTare, portMAX_DELAY);
-        xSemaphoreGive(xSemaphoreStopReadWeight);
+        vTaskSuspend(taskReadWeightHandle);
         xSemaphoreGive(xSemaphoreStopKeypad);
 
         esp_err_t r = hx711_wait(&dev, 500);
@@ -593,7 +585,7 @@ void calibrate_task(void *pvParameter)
     while (1)
     {
         xSemaphoreTake(xSemaphoreCalibrate, portMAX_DELAY);
-        xSemaphoreGive(xSemaphoreStopReadWeight);
+        vTaskSuspend(taskReadWeightHandle);
         xSemaphoreGive(xSemaphoreStopKeypad);
 
         esp_err_t r = hx711_wait(&dev, 500);
@@ -670,7 +662,7 @@ void keypad_task(void *pvParameters)
                 ESP_LOGI(TAG, "Tipo selecionado: %d", trashTypeKeypad);
                 messageSent = 1;
                 trashTypeKeypad = 0;
-                xSemaphoreGive(xSemaphoreStopReadWeight);
+                vTaskSuspend(taskReadWeightHandle);
                 xSemaphoreGive(xSemaphoreStopKeypad);
                 xTimerStop(xTimerReadWeightTimeout, 0);
                 mensagem.lcdEnTimeoutOff = 1;
@@ -738,13 +730,6 @@ void app_main()
 
     xSemaphoreStopKeypad = xSemaphoreCreateBinary();
     if (xSemaphoreStopKeypad == NULL)
-    {
-        ESP_LOGW(TAG, "Não foi possível criar o semáforo");
-        esp_restart();
-    }
-
-    xSemaphoreStopReadWeight = xSemaphoreCreateBinary();
-    if (xSemaphoreStopReadWeight == NULL)
     {
         ESP_LOGW(TAG, "Não foi possível criar o semáforo");
         esp_restart();
